@@ -4,39 +4,60 @@ from ibapi.contract import Contract
 import threading
 import time
 
-# 1️⃣ Create a class combining EWrapper and EClient
 class IBApp(EWrapper, EClient):
     def __init__(self):
         EClient.__init__(self, self)
+        self.connection_ready = threading.Event()  # signals connection
+        self.data_received = threading.Event()    # signals at least one price tick received
 
-    # 2️⃣ Callback to handle price updates
+    # Called when the connection is fully established
+    def nextValidId(self, orderId):
+        print(f"✅ Connection ready, next valid order ID: {orderId}")
+        self.connection_ready.set()
+
+    # Called for each price update
     def tickPrice(self, reqId, tickType, price, attrib):
         print(f"Tick Price. ReqId: {reqId}, Type: {tickType}, Price: {price}")
+        self.data_received.set()  # mark that at least one price tick arrived
 
-# 3️⃣ Connect to TWS or IB Gateway
+    # Handle errors
+    def error(self, reqId, errorCode, errorString, contract=None):
+        print(f"⚠️ Error. ReqId: {reqId}, Code: {errorCode}, Msg: {errorString}")
+
+
+# 1️⃣ Connect to TWS
 app = IBApp()
-app.connect("127.0.0.1", 7497, clientId=1)  # 7496 for live accounts
+# Change port to 7497 if you are using paper trading TWS
+app.connect("127.0.0.1", 7496, clientId=1)
 
-# 4️⃣ Start the network loop in a separate thread
+# 2️⃣ Start event loop in a thread
 def run_loop():
     app.run()
 
 api_thread = threading.Thread(target=run_loop, daemon=True)
 api_thread.start()
 
-# 5️⃣ Define a contract (Apple stock)
+# 3️⃣ Wait until connection is ready
+if not app.connection_ready.wait(timeout=10):
+    print("❌ Failed to connect to TWS")
+    app.disconnect()
+    exit(1)
+
+# 4️⃣ Define a contract (Apple stock)
 contract = Contract()
 contract.symbol = "AAPL"
 contract.secType = "STK"
 contract.exchange = "SMART"
 contract.currency = "USD"
 
-# 6️⃣ Request market data
+# 5️⃣ Request market data
+print("Requesting market data for AAPL...")
 app.reqMktData(1, contract, "", False, False, [])
 
-# 7️⃣ Let it run for 10 seconds to receive some data
-time.sleep(10)
+# 6️⃣ Wait until at least one tick arrives or timeout after 10 seconds
+if not app.data_received.wait(timeout=10):
+    print("⚠️ No market data received within 10 seconds")
 
-# 8️⃣ Disconnect
+# 7️⃣ Disconnect
 app.disconnect()
 print("Disconnected from TWS")
